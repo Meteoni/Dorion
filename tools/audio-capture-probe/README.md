@@ -2,10 +2,12 @@
 
 This is a diagnostic plugin, not a confirmed fix. It tests the installed WebView2 runtime through Dorion's real `getDisplayMedia` path. No build or replacement executable is needed.
 
+Version 2 calls the native `MediaDevices` prototype method directly. Vencord's enabled-by-default `WebScreenShare` plugin replaces the instance method, forces `restrictOwnAudio: true`, and omits the caller's `windowAudio` preference. Version 1 did not account for this interception, so its requests were not controlled native-API tests when that wrapper was active. Version 2 reports `pageCaptureOverridden` and refuses to run if the prototype method itself is not native.
+
 ## Install
 
 1. Download `audio-capture-probe.js` into the `plugins` folder beside your portable `Dorion.exe`. For a nonportable installation, use the plugin folder opened by Dorion's settings.
-2. Enable the plugin in Dorion's plugin settings. Reload Dorion if the panel does not appear. Preload is not required: the diagnostic calls the API directly and does not patch Discord's requests.
+2. Enable the plugin in Dorion's plugin settings. A file added while Dorion is running is discovered at full application startup, not by page reload. Alternatively, register it using the included `plugins.json` entry (merge this entry if other plugins are listed). Reload after registration. The panel title must say **v2**. Preload is not required.
 3. Download `external-tone.html`, open it in a separate browser outside Dorion, and click **Play 1511 Hz reference**. Use headphones for a clean test.
 
 ## Test
@@ -17,7 +19,7 @@ For each selection, enable the picker's audio checkbox if one is available. Mere
 3. Click **Application window**, select the external reference browser window, and measure. It should return an audio track containing 1511 Hz while excluding Dorion's 997 Hz tone.
 4. Repeat **Application window** with a different, silent application's window. The 1511 Hz tone should disappear. This control distinguishes application audio from system audio paired with window video. Use a different application process, since several windows of one app may share audio.
 
-All levels are relative diagnostic FFT readings, not calibrated sound-pressure measurements. More negative means quieter; compare baseline versus restricted capture. No audio/video is recorded, uploaded, played back from the capture, or connected to Discord. Only generated test tones play through the speakers. Capture stops after 60 seconds, when stopped in the picker, or when the panel is closed.
+All levels are relative diagnostic FFT readings, not calibrated sound-pressure measurements. More negative means quieter; compare baseline versus restricted capture. `generatedTone997Hz` measures the test signal before it reaches the output and should rise when the tone switches on. `ownTone997Hz` measures that frequency inside the captured stream. No audio/video is recorded, uploaded, played back from the capture, or connected to Discord. Only generated test tones play through the speakers. Capture stops after 180 seconds, when stopped in the picker, or when the panel is closed.
 
 Copy the panel's text results to report the runtime behavior. Track device/group IDs, window titles, and Discord channel information are omitted from the report.
 
@@ -33,4 +35,7 @@ https://chromium.googlesource.com/chromium/src/+/5dd5bdb2e5d905e6e1a1f07e1927304
 The WebView2 request remains open:
 https://github.com/MicrosoftEdge/WebView2Feedback/issues/4327
 
-The inspected Dorion installation uses WebView2 157.0.4341.10. At preparation time neither per-application audio nor self-excluding audio had been verified by a completed runtime capture test. The desktop automation helper rejected control of WebView2 DevTools, so this plugin provides a manual test without DevTools access.
+The inspected Dorion installation uses WebView2 157.0.4341.10 and loads Shelter plus Vencord. A source audit found no direct capture implementation in Dorion's Rust/injection sources; its Vencord WebScreenShare plugin does wrap this API:
+https://github.com/Vendicated/Vencord/blob/main/src/plugins/webScreenShare.browser/index.tsx
+
+Version 1 user tests returned silent monitor audio and broader self-excluding audio with window video. Because the page method may have been Vencord's wrapper, these do not establish how native WebView2 handles the exact requested preferences. Version 2 requires a fresh runtime test. The desktop automation helper rejected control of WebView2 DevTools, so this plugin provides a manual test without DevTools access.

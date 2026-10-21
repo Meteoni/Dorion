@@ -3,6 +3,11 @@
   if (window.self !== window.top || document.getElementById('dorion-audio-probe')) return;
   const devices = navigator.mediaDevices;
   if (!devices?.getDisplayMedia) return;
+  // Vencord replaces the instance method and rewrites capture options. Use the
+  // browser's prototype method so this probe tests the requested options directly.
+  const nativeGetDisplayMedia = Object.getPrototypeOf(devices).getDisplayMedia;
+  const nativeCaptureAvailable = typeof nativeGetDisplayMedia === 'function'
+    && Function.prototype.toString.call(nativeGetDisplayMedia).includes('[native code]');
 
   const host = document.createElement('div');
   host.id = 'dorion-audio-probe';
@@ -14,7 +19,7 @@
     pre { white-space:pre-wrap;max-height:240px;overflow:auto;user-select:text;font:12px/1.4 monospace }
     h3,p { margin:0 0 8px }
   </style><section>
-    <h3>Dorion audio capture probe</h3>
+    <h3>Dorion audio capture probe v2</h3>
     <p>Local analysis only. Choose a capture mode, then measure. The test plays a short 997 Hz tone inside Dorion. Nothing is sent to your call.</p>
     <button data-mode="baseline">1. Screen baseline</button>
     <button data-mode="exclude">2. Screen excluding self</button>
@@ -51,6 +56,10 @@
   // A real picker selection is required; optional hints may be ignored by WebView2.
   async function capture(mode) {
     if (busy || disposed) return;
+    if (!nativeCaptureAvailable) {
+      report('Native prototype method is unavailable or patched. Disable the capture-modifying client plugin and reload; this probe will not silently use the page wrapper.');
+      return;
+    }
     busy = true;
     stop();
     const audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
@@ -66,7 +75,7 @@
     let stream;
     try {
       const resumed = context.resume();
-      const pending = devices.getDisplayMedia(options);
+      const pending = Reflect.apply(nativeGetDisplayMedia, devices, [options]);
       [, stream] = await Promise.all([resumed, pending]);
       if (disposed) { stream.getTracks().forEach(track => track.stop()); await context.close(); return; }
       const tracks = stream.getAudioTracks();
@@ -76,6 +85,7 @@
       });
       report(`${mode}: returned ${tracks.length} audio track(s)`, {
         requested: options,
+        captureImplementation: 'native prototype method',
         surface: stream.getVideoTracks()[0]?.getSettings().displaySurface,
         audioSettings: settings
       });
@@ -94,10 +104,13 @@
       oscillator.frequency.value = 997;
       const gain = context.createGain();
       gain.gain.value = 0;
-      oscillator.connect(gain).connect(context.destination);
+      const generatedAnalyser = context.createAnalyser();
+      generatedAnalyser.fftSize = 8192;
+      generatedAnalyser.smoothingTimeConstant = 0;
+      oscillator.connect(gain).connect(generatedAnalyser).connect(context.destination);
       oscillator.start();
-      session = { stream, context, analyser, source, oscillator, gain, mode };
-      session.timer = setTimeout(() => { stop(); report('Capture stopped after 60 seconds.'); }, 60000);
+      session = { stream, context, analyser, generatedAnalyser, source, oscillator, gain, mode };
+      session.timer = setTimeout(() => { stop(); report('Capture stopped after 180 seconds.'); }, 180000);
       stream.getVideoTracks()[0]?.addEventListener('ended', () => {
         if (session?.stream === stream) { stop(); report('Capture ended.'); }
       });
@@ -117,12 +130,14 @@
     busy = true;
     const current = session;
     const bins = new Float32Array(current.analyser.frequencyBinCount);
+    const generatedBins = new Float32Array(current.generatedAnalyser.frequencyBinCount);
     const readings = [];
     try {
+      await current.context.resume();
       for (const amplitude of [0, 0.04]) {
         current.gain.gain.setTargetAtTime(amplitude, current.context.currentTime, 0.02);
         await new Promise(resolve => setTimeout(resolve, 500));
-        const samples = [[], []];
+        const samples = [[], [], []];
         for (let i = 0; i < 15; i++) {
           if (session !== current) throw new Error('Capture was stopped.');
           current.analyser.getFloatFrequencyData(bins);
@@ -130,13 +145,19 @@
             const center = Math.round(frequency * current.analyser.fftSize / current.context.sampleRate);
             samples[index].push(Math.max(-160, ...bins.slice(center - 2, center + 3)));
           });
+          current.generatedAnalyser.getFloatFrequencyData(generatedBins);
+          const ownBin = Math.round(997 * current.generatedAnalyser.fftSize / current.context.sampleRate);
+          samples[2].push(Math.max(-160, ...generatedBins.slice(ownBin - 2, ownBin + 3)));
           await new Promise(resolve => setTimeout(resolve, 80));
         }
         readings.push(samples.map(values => Number(values.sort((a, b) => a - b)[7].toFixed(1))));
       }
       report(`${current.mode}: measured levels (dB; more negative = quieter)`, {
         ownTone997Hz: { off: readings[0][0], on: readings[1][0] },
-        externalTone1511Hz: { off: readings[0][1], on: readings[1][1] }
+        externalTone1511Hz: { off: readings[0][1], on: readings[1][1] },
+        generatedTone997Hz: { off: readings[0][2], on: readings[1][2] },
+        contextState: current.context.state,
+        trackStates: current.stream.getAudioTracks().map(track => ({ enabled: track.enabled, muted: track.muted, readyState: track.readyState }))
       });
       report('Compare the baseline and excluding-self results. Self exclusion works only if the 997 Hz tone disappears while the external 1511 Hz tone remains. For window capture, repeat with a different window to check isolation.');
     } catch (error) {
@@ -154,6 +175,12 @@
   root.getElementById('stop').onclick = () => { stop(); report('Stopped.'); };
   root.getElementById('close').onclick = () => { disposed = true; stop(); host.remove(); };
   window.addEventListener('pagehide', stop, { once: true });
-  report('Runtime', { userAgent: navigator.userAgent, restrictOwnAudioAdvertised: devices.getSupportedConstraints().restrictOwnAudio ?? false });
+  report('Runtime', {
+    probeVersion: 2,
+    userAgent: navigator.userAgent,
+    restrictOwnAudioAdvertised: devices.getSupportedConstraints().restrictOwnAudio ?? false,
+    pageCaptureOverridden: devices.getDisplayMedia !== nativeGetDisplayMedia,
+    nativeCaptureAvailable
+  });
   (document.body || document.documentElement).appendChild(host);
 })();
