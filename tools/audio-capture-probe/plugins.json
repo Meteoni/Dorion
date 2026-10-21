@@ -1,0 +1,7 @@
+{
+  "audio-capture-probe.js": {
+    "name": "Dorion Audio Capture Probe",
+    "enabled": true,
+    "preload": false
+  }
+}
