@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Dorion external audio reference</title>
+<body style="font:16px/1.5 system-ui;max-width:640px;margin:40px auto;padding:20px">
+<h1>Dorion external audio reference</h1>
+<p>Open this file in a separate browser, outside Dorion. Start the 1511 Hz tone and keep this window open while running the Dorion probe.</p>
+<button id="play">Play 1511 Hz reference</button>
+<button id="stop">Stop</button>
+<p id="status">Stopped</p>
+<script>
+  let context;
+  document.getElementById('play').onclick = async () => {
+    if (context) return;
+    context = new AudioContext();
+    await context.resume();
+    const oscillator = context.createOscillator();
+    oscillator.frequency.value = 1511;
+    const gain = context.createGain();
+    gain.gain.value = 0.04;
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start();
+    document.getElementById('status').textContent = 'Playing 1511 Hz';
+  };
+  document.getElementById('stop').onclick = () => {
+    context?.close();
+    context = null;
+    document.getElementById('status').textContent = 'Stopped';
+  };
+</script>
+</body>
+</html>
